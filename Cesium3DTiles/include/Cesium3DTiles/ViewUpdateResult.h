@@ -39,6 +39,8 @@ public:
   uint32_t culledTilesVisited = 0;
   uint32_t tilesCulled = 0;
   uint32_t maxDepthVisited = 0;
+
+  uint32_t frameNumber = 0;
   //! @endcond
 };
 

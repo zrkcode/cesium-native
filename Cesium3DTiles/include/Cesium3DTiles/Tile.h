@@ -436,6 +436,10 @@ public:
     return this->_lastSelectionState;
   }
 
+  const TileSelectionState& getPrevLastSelectionState() const noexcept {
+    return this->_prevLastSelectionState;
+  }
+
   /**
    * @brief Set the {@link TileSelectionState} of this tile.
    *
@@ -444,6 +448,7 @@ public:
    * @param newState The new stace
    */
   void setLastSelectionState(const TileSelectionState& newState) noexcept {
+    this->_prevLastSelectionState = this->_lastSelectionState;
     this->_lastSelectionState = newState;
   }
 
@@ -580,6 +585,7 @@ private:
 
   // Selection state
   TileSelectionState _lastSelectionState;
+  TileSelectionState _prevLastSelectionState;
 
   // Overlays
   std::vector<RasterMappedTo3DTile> _rasterTiles;

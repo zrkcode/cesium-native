@@ -100,15 +100,7 @@ bool Tile::isRenderable() const noexcept {
 
   // So, we explicitly treat external tilesets as non-renderable.
   return this->getState() >= LoadState::ContentLoaded &&
-         (!this->_pContent || this->_pContent->model.has_value()) &&
-         !std::any_of(
-             this->_rasterTiles.begin(),
-             this->_rasterTiles.end(),
-             [](const RasterMappedTo3DTile& rasterTile) {
-               return rasterTile.getLoadingTile() &&
-                      rasterTile.getLoadingTile()->getState() ==
-                          RasterOverlayTile::LoadState::Loading;
-             });
+         (!this->_pContent || this->_pContent->model.has_value());
 }
 
 void Tile::loadContent() {

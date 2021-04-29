@@ -68,7 +68,7 @@ public:
    * TileSelectionState::Result::None}
    */
   constexpr TileSelectionState() noexcept
-      : _frameNumber(0), _result(Result::None) {}
+      : _frameNumber(0), _result(Result::None), _lineNumber{} {}
 
   /**
    * @brief Initializes a new instance with a given {@link
@@ -77,8 +77,8 @@ public:
    * @param frameNumber The frame number in which the selection took place.
    * @param result The result of the selection.
    */
-  constexpr TileSelectionState(int32_t frameNumber, Result result) noexcept
-      : _frameNumber(frameNumber), _result(result) {}
+  constexpr TileSelectionState(int32_t frameNumber, Result result, int32_t lineNumber) noexcept
+      : _frameNumber(frameNumber), _result(result), _lineNumber{lineNumber} {}
 
   /**
    * @brief Gets the frame number in which selection took place.
@@ -142,6 +142,8 @@ public:
     }
   }
 
+  const int32_t getLine() const noexcept { return _lineNumber; }
+
   /**
    * @brief Marks this tile as "kicked".
    */
@@ -159,6 +161,7 @@ public:
   }
 
 private:
+  int32_t _lineNumber;
   int32_t _frameNumber;
   Result _result;
 };

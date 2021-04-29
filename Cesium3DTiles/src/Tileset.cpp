@@ -294,6 +294,7 @@ const ViewUpdateResult& Tileset::updateView(const ViewState& viewState) {
   int32_t currentFrameNumber = previousFrameNumber + 1;
 
   ViewUpdateResult& result = this->_updateResult;
+  result.frameNumber = currentFrameNumber;
   // result.tilesLoading = 0;
   result.tilesToRenderThisFrame.clear();
   // result.newTilesToRenderThisFrame.clear();
@@ -1079,6 +1080,10 @@ static void markTileNonRendered(
     Tile& tile,
     ViewUpdateResult& result) {
   if (lastResult == TileSelectionState::Result::Rendered) {
+    tile.setLastSelectionState(TileSelectionState(
+        result.frameNumber,
+        TileSelectionState::Result::None,
+        __LINE__));
     result.tilesToNoLongerRenderThisFrame.push_back(&tile);
   }
 }
@@ -1225,7 +1230,7 @@ Tileset::TraversalDetails Tileset::_visitTileIfNeeded(
     markTileAndChildrenNonRendered(frameState.lastFrameNumber, tile, result);
     tile.setLastSelectionState(TileSelectionState(
         frameState.currentFrameNumber,
-        TileSelectionState::Result::Culled));
+        TileSelectionState::Result::Culled, __LINE__));
 
     // Preload this culled sibling if requested.
     if (this->_options.preloadSiblings) {
@@ -1263,7 +1268,7 @@ Tileset::TraversalDetails Tileset::_renderLeaf(
 
   tile.setLastSelectionState(TileSelectionState(
       frameState.currentFrameNumber,
-      TileSelectionState::Result::Rendered));
+      TileSelectionState::Result::Rendered, __LINE__));
   result.tilesToRenderThisFrame.push_back(&tile);
   addTileToLoadQueue(
       this->_loadQueueMedium,
@@ -1364,7 +1369,7 @@ Tileset::TraversalDetails Tileset::_renderInnerTile(
   markChildrenNonRendered(frameState.lastFrameNumber, tile, result);
   tile.setLastSelectionState(TileSelectionState(
       frameState.currentFrameNumber,
-      TileSelectionState::Result::Rendered));
+      TileSelectionState::Result::Rendered, __LINE__));
   result.tilesToRenderThisFrame.push_back(&tile);
 
   TraversalDetails traversalDetails;
@@ -1401,7 +1406,7 @@ Tileset::TraversalDetails Tileset::_refineToNothing(
 
   tile.setLastSelectionState(TileSelectionState(
       frameState.currentFrameNumber,
-      TileSelectionState::Result::Refined));
+      TileSelectionState::Result::Refined, __LINE__));
   return noChildrenTraversalDetails;
 }
 
@@ -1468,7 +1473,7 @@ bool Tileset::_kickDescendantsAndRenderTile(
 
   tile.setLastSelectionState(TileSelectionState(
       frameState.currentFrameNumber,
-      TileSelectionState::Result::Rendered));
+      TileSelectionState::Result::Rendered, __LINE__));
 
   // If we're waiting on heaps of descendants, the above will take too long. So
   // in that case, load this tile INSTEAD of loading any of the descendants, and
@@ -1654,7 +1659,12 @@ Tileset::TraversalDetails Tileset::_visitTile(
     }
     tile.setLastSelectionState(TileSelectionState(
         frameState.currentFrameNumber,
-        TileSelectionState::Result::Refined));
+        TileSelectionState::Result::Refined, 
+        __LINE__)
+        );
+    if (meetsSse) {
+      printf("asas");
+    }
   }
 
   if (this->_options.preloadAncestors && !queuedForLoad) {
@@ -1712,27 +1722,27 @@ void Tileset::_processLoadQueue() {
 }
 
 void Tileset::_unloadCachedTiles() {
-  const int64_t maxBytes = this->getOptions().maximumCachedBytes;
+  //const int64_t maxBytes = this->getOptions().maximumCachedBytes;
 
-  Tile* pTile = this->_loadedTiles.head();
+  //Tile* pTile = this->_loadedTiles.head();
 
-  while (this->getTotalDataBytes() > maxBytes) {
-    if (pTile == nullptr || pTile == this->_pRootTile.get()) {
-      // We've either removed all tiles or the next tile is the root.
-      // The root tile marks the beginning of the tiles that were used
-      // for rendering last frame.
-      break;
-    }
+  //while (this->getTotalDataBytes() > maxBytes) {
+  //  if (pTile == nullptr || pTile == this->_pRootTile.get()) {
+  //    // We've either removed all tiles or the next tile is the root.
+  //    // The root tile marks the beginning of the tiles that were used
+  //    // for rendering last frame.
+  //    break;
+  //  }
 
-    Tile* pNext = this->_loadedTiles.next(*pTile);
+  //  Tile* pNext = this->_loadedTiles.next(*pTile);
 
-    bool removed = pTile->unloadContent();
-    if (removed) {
-      this->_loadedTiles.remove(*pTile);
-    }
+  //  bool removed = pTile->unloadContent();
+  //  if (removed) {
+  //    this->_loadedTiles.remove(*pTile);
+  //  }
 
-    pTile = pNext;
-  }
+  //  pTile = pNext;
+  //}
 }
 
 void Tileset::_markTileVisited(Tile& tile) {
