@@ -183,6 +183,7 @@ static int generateOverlayTextureCoordinates(
 /*static*/ CesiumGeospatial::BoundingRegion
 GltfContent::createRasterOverlayTextureCoordinates(
     CesiumGltf::Model& gltf,
+    const glm::dmat4& tileTransform,
     const std::string& projectionName,
     const CesiumGeospatial::Projection& projection,
     const CesiumGeometry::Rectangle& rectangle) {
@@ -203,6 +204,7 @@ GltfContent::createRasterOverlayTextureCoordinates(
       -1,
       [&positionAccessorsToTextureCoordinateAccessor,
        &attributeName,
+       &tileTransform,
        &projection,
        &rectangle,
        &west,
@@ -246,7 +248,7 @@ GltfContent::createRasterOverlayTextureCoordinates(
             generateOverlayTextureCoordinates(
                 gltf_,
                 positionAccessorIndex,
-                transform,
+                tileTransform * transform,
                 projection,
                 rectangle,
                 west,

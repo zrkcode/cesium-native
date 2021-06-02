@@ -1160,8 +1160,10 @@ static bool isCompletelyClipped(
     const std::vector<CartographicSelection>& cartographicSelections) {
 
   // TODO: generalize to more than just bounding region
-  const CesiumGeospatial::GlobeRectangle* pRectangle =
-      Cesium3DTiles::Impl::obtainGlobeRectangle(&boundingVolume);
+  // const CesiumGeospatial::GlobeRectangle* pRectangle =
+  //    Cesium3DTiles::Impl::obtainGlobeRectangle(&boundingVolume);
+  const std::optional<GlobeRectangle> pRectangle =
+      getGlobeRectangle(boundingVolume);
   if (!pRectangle) {
     return false;
   }
@@ -1291,8 +1293,10 @@ static bool isVisibleFromCamera(
   }
   const std::optional<CesiumGeospatial::Cartographic>& position =
       viewState.getPositionCartographic();
-  const CesiumGeospatial::GlobeRectangle* pRectangle =
-      Cesium3DTiles::Impl::obtainGlobeRectangle(&boundingVolume);
+  // const CesiumGeospatial::GlobeRectangle* pRectangle =
+  //    Cesium3DTiles::Impl::obtainGlobeRectangle(&boundingVolume);
+  const std::optional<GlobeRectangle> pRectangle =
+      getGlobeRectangle(boundingVolume);
   if (position && pRectangle) {
     return pRectangle->contains(position.value());
   }
