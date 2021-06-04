@@ -1847,14 +1847,17 @@ Tileset::TraversalDetails Tileset::_visitVisibleChildrenNearToFar(
 
 void Tileset::_processLoadQueue() {
   Tileset::processQueue(
+      this->_asyncSystem,
       this->_loadQueueHigh,
       this->_loadsInProgress,
       this->_options.maximumSimultaneousTileLoads);
   Tileset::processQueue(
+      this->_asyncSystem,
       this->_loadQueueMedium,
       this->_loadsInProgress,
       this->_options.maximumSimultaneousTileLoads);
   Tileset::processQueue(
+      this->_asyncSystem,
       this->_loadQueueLow,
       this->_loadsInProgress,
       this->_options.maximumSimultaneousTileLoads);
@@ -2002,6 +2005,7 @@ static bool anyRasterOverlaysNeedLoading(const Tile& tile) {
 }
 
 /*static*/ void Tileset::processQueue(
+    const CesiumAsync::AsyncSystem& asyncSystem,
     std::vector<Tileset::LoadRecord>& queue,
     std::atomic<uint32_t>& loadsInProgress,
     uint32_t maximumLoadsInProgress) {
@@ -2012,7 +2016,7 @@ static bool anyRasterOverlaysNeedLoading(const Tile& tile) {
   std::sort(queue.begin(), queue.end());
 
   for (LoadRecord& record : queue) {
-    record.pTile->loadContent();
+    record.pTile->loadContent(asyncSystem);
 
     if (loadsInProgress >= maximumLoadsInProgress) {
       break;

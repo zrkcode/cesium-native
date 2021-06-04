@@ -575,6 +575,7 @@ private:
       Tile& tile,
       double distance);
   static void processQueue(
+      const CesiumAsync::AsyncSystem& asyncSystem,
       std::vector<Tileset::LoadRecord>& queue,
       std::atomic<uint32_t>& loadsInProgress,
       uint32_t maximumLoadsInProgress);

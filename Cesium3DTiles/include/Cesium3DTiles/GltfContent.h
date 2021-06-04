@@ -8,6 +8,7 @@
 #include "Cesium3DTiles/TileID.h"
 #include "Cesium3DTiles/TileRefine.h"
 #include "CesiumGltf/GltfReader.h"
+#include "CesiumAsync/AsyncSystem.h"
 #include <cstddef>
 #include <glm/mat4x4.hpp>
 #include <gsl/span>
@@ -29,8 +30,8 @@ public:
    * The result will only contain the `model`. Other fields will be
    * empty or have default values.
    */
-  std::unique_ptr<TileContentLoadResult>
-  load(const TileContentLoadInput& input) override;
+  CesiumAsync::Future<std::unique_ptr<TileContentLoadResult>>
+  load(const CesiumAsync::AsyncSystem& asyncSystem, const TileContentLoadInput& input) override;
 
   /**
    * @brief Create a {@link TileContentLoadResult} from the given data.

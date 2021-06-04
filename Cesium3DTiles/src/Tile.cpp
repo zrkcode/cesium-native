@@ -12,6 +12,7 @@
 #include "TileUtilities.h"
 #include "upsampleGltfForRasterOverlays.h"
 #include <cstddef>
+#include <functional>
 
 using namespace CesiumAsync;
 using namespace CesiumGeometry;
@@ -116,7 +117,7 @@ bool Tile::isRenderable() const noexcept {
   return false;
 }
 
-void Tile::loadContent() {
+void Tile::loadContent(const CesiumAsync::AsyncSystem& asyncSystem) {
   if (this->getState() != LoadState::Unloaded) {
     // No need to load geometry, but give previously-throttled
     // raster overlay tiles a chance to load.
@@ -255,7 +256,7 @@ void Tile::loadContent() {
       } else {
         // Try again later. Push the parent tile loading along if we can.
         if (this->getParent()) {
-          this->getParent()->loadContent();
+          this->getParent()->loadContent(asyncSystem);
         }
         this->setState(LoadState::Unloaded);
       }
@@ -273,10 +274,36 @@ void Tile::loadContent() {
   };
   TileContentLoadInput loadInput(tileset.getExternals().pLogger, *this);
 
+  std::function<void(LoadResult&&)> handleLoadResult = [this](LoadResult&& loadResult) {
+    // if not already loaded, update the tile with the loading result
+    if (this->getState() != LoadState::ContentLoaded) {
+      this->_pContent = std::move(loadResult.pContent);
+      this->_pRendererResources = loadResult.pRendererResources;
+      this->getTileset()->notifyTileDoneLoading(this);
+      this->setState(loadResult.state);
+    }
+  };
+
+  std::function<void(const std::exception& e)> handleLoadError = [this](const std::exception& e) {
+      this->_pContent.reset();
+      this->_pRendererResources = nullptr;
+      this->getTileset()->notifyTileDoneLoading(this);
+      this->setState(LoadState::Failed);
+
+      SPDLOG_LOGGER_ERROR(
+          this->getTileset()->getExternals().pLogger,
+          "An exception occurred while loading tile: {}",
+          e.what());
+    };
+
   const CesiumGeometry::Axis gltfUpAxis = tileset.getGltfUpAxis();
   std::move(maybeRequestFuture.value())
       .thenInWorkerThread(
-          [loadInput = std::move(loadInput),
+          [this,
+           asyncSystem,
+           loadInput = std::move(loadInput),
+           handleLoadResult,
+           handleLoadError,
            projections = std::move(projections),
            cartographicSelections =
                tileset.getOptions().cartographicSelections,
@@ -319,187 +346,190 @@ void Tile::loadContent() {
             loadInput.data = pResponse->data();
             loadInput.contentType = pResponse->contentType();
             loadInput.url = pRequest->url();
-            std::unique_ptr<TileContentLoadResult> pContent =
-                TileContentFactory::createContent(loadInput);
+            
+            TileContentFactory::createContent(asyncSystem, loadInput).thenInWorkerThread(
+              [loadInput = std::move(loadInput),
+               projections = std::move(projections),
+               &cartographicSelections,
+               &customMaskNames,
+               gltfUpAxis,
+               pPrepareRendererResources,
+               pLogger,
+               pResponse](
+                  std::unique_ptr<TileContentLoadResult>&& pContent) mutable {
 
-            void* pRendererResources = nullptr;
-            if (pContent) {
-              pContent->httpStatusCode = pResponse->statusCode();
+                void* pRendererResources = nullptr;
+                if (pContent) {
+                  pContent->httpStatusCode = pResponse->statusCode();
 
-              if (pContent->model) {
+                  if (pContent->model) {
 
-                CesiumGltf::Model& model = pContent->model.value();
+                    CesiumGltf::Model& model = pContent->model.value();
 
-                // TODO The `extras` are currently the only way to pass
-                // arbitrary information to the consumer, so the up-axis
-                // is stored here:
-                model.extras["gltfUpAxis"] = gltfUpAxis;
+                    // TODO The `extras` are currently the only way to pass
+                    // arbitrary information to the consumer, so the up-axis
+                    // is stored here:
+                    model.extras["gltfUpAxis"] = gltfUpAxis;
 
-                const BoundingVolume& boundingVolume =
-                    loadInput.tileBoundingVolume;
-                Tile::generateTextureCoordinates(
-                    model,
-                    boundingVolume,
-                    projections);
+                    const BoundingVolume& boundingVolume =
+                        loadInput.tileBoundingVolume;
+                    Tile::generateTextureCoordinates(
+                        model,
+                        boundingVolume,
+                        projections);
 
-                // TODO factor out into helper function
-                // rasterize culling polygons into the tile's bounding rectangle
+                    // TODO factor out into helper function
+                    // rasterize culling polygons into the tile's bounding rectangle
 
-                const CesiumGeospatial::GlobeRectangle* pRectangle =
-                    Cesium3DTiles::Impl::obtainGlobeRectangle(&boundingVolume);
+                    const CesiumGeospatial::GlobeRectangle* pRectangle =
+                        Cesium3DTiles::Impl::obtainGlobeRectangle(&boundingVolume);
 
-                if (!customMaskNames.empty() && pRectangle) {
-                  double rectangleWidth = pRectangle->computeWidth();
-                  double rectangleHeight = pRectangle->computeHeight();
+                    if (!customMaskNames.empty() && pRectangle) {
+                      double rectangleWidth = pRectangle->computeWidth();
+                      double rectangleHeight = pRectangle->computeHeight();
 
-                  for (const std::string& customMaskName : customMaskNames) {
-                    // Create mask texture
+                      for (const std::string& customMaskName : customMaskNames) {
+                        // Create mask texture
 
-                    // create source image
-                    size_t maskImageId = model.images.size();
-                    model.images.emplace_back();
-                    CesiumGltf::Image& maskImage =
-                        model.images[maskImageId];
-                    maskImage.cesium.width = 256;
-                    maskImage.cesium.height = 256;
-                    maskImage.cesium.channels = 1;
-                    maskImage.cesium.bytesPerChannel = 1;
-                    maskImage.cesium.pixelData.resize(65536);
-                    
-                    std::memset(
-                        maskImage.cesium.pixelData.data(),
-                        0,
-                        65536);
-                    
-                    // TODO: this is naive approach, use line-triangle
-                    // intersections to rasterize one row at a time
-                    // NOTE: also completely ignores antimeridian (really these
-                    // calculations should be normalized to the first vertex)
-                    // TODO: extend this to non-clipping-specific selections
-                    for (const CartographicSelection& selection :
-                        cartographicSelections) {
-                      
-                      if (selection.getTargetTextureName() != customMaskName) {
-                        continue;
-                      }
+                        // create source image
+                        size_t maskImageId = model.images.size();
+                        model.images.emplace_back();
+                        CesiumGltf::Image& maskImage =
+                            model.images[maskImageId];
+                        maskImage.cesium.width = 256;
+                        maskImage.cesium.height = 256;
+                        maskImage.cesium.channels = 1;
+                        maskImage.cesium.bytesPerChannel = 1;
+                        maskImage.cesium.pixelData.resize(65536);
+                        
+                        std::memset(
+                            maskImage.cesium.pixelData.data(),
+                            0,
+                            65536);
+                        
+                        // TODO: this is naive approach, use line-triangle
+                        // intersections to rasterize one row at a time
+                        // NOTE: also completely ignores antimeridian (really these
+                        // calculations should be normalized to the first vertex)
+                        // TODO: extend this to non-clipping-specific selections
+                        for (const CartographicSelection& selection :
+                            cartographicSelections) {
+                          
+                          if (selection.getTargetTextureName() != customMaskName) {
+                            continue;
+                          }
 
-                      const std::vector<glm::dvec2>& vertices =
-                          selection.getVertices();
-                      const std::vector<uint32_t>& indices =
-                          selection.getIndices();
-                      for (size_t triangle = 0; triangle < indices.size() / 3;
-                          ++triangle) {
-                        const glm::dvec2& a = vertices[indices[3 * triangle]];
-                        const glm::dvec2& b = vertices[indices[3 * triangle + 1]];
-                        const glm::dvec2& c = vertices[indices[3 * triangle + 2]];
+                          const std::vector<glm::dvec2>& vertices =
+                              selection.getVertices();
+                          const std::vector<uint32_t>& indices =
+                              selection.getIndices();
+                          for (size_t triangle = 0; triangle < indices.size() / 3;
+                              ++triangle) {
+                            const glm::dvec2& a = vertices[indices[3 * triangle]];
+                            const glm::dvec2& b = vertices[indices[3 * triangle + 1]];
+                            const glm::dvec2& c = vertices[indices[3 * triangle + 2]];
 
-                        glm::dvec2 ab = b - a;
-                        glm::dvec2 ab_perp(-ab.y, ab.x);
-                        glm::dvec2 bc = c - b;
-                        glm::dvec2 bc_perp(-bc.y, bc.x);
-                        glm::dvec2 ca = a - c;
-                        glm::dvec2 ca_perp(-ca.y, ca.x);
+                            glm::dvec2 ab = b - a;
+                            glm::dvec2 ab_perp(-ab.y, ab.x);
+                            glm::dvec2 bc = c - b;
+                            glm::dvec2 bc_perp(-bc.y, bc.x);
+                            glm::dvec2 ca = a - c;
+                            glm::dvec2 ca_perp(-ca.y, ca.x);
 
-                        for (size_t j = 0; j < 256; ++j) {
-                          double pixelY =
-                              pRectangle->getSouth() +
-                              rectangleHeight * (double(j) + 0.5) / 256.0;
-                          for (size_t i = 0; i < 256; ++i) {
-                            double pixelX =
-                                pRectangle->getWest() +
-                                rectangleWidth * (double(i) + 0.5) / 256.0;
-                            glm::dvec2 v(pixelX, pixelY);
+                            for (size_t j = 0; j < 256; ++j) {
+                              double pixelY =
+                                  pRectangle->getSouth() +
+                                  rectangleHeight * (double(j) + 0.5) / 256.0;
+                              for (size_t i = 0; i < 256; ++i) {
+                                double pixelX =
+                                    pRectangle->getWest() +
+                                    rectangleWidth * (double(i) + 0.5) / 256.0;
+                                glm::dvec2 v(pixelX, pixelY);
 
-                            glm::dvec2 av = v - a;
-                            glm::dvec2 cv = v - c;
+                                glm::dvec2 av = v - a;
+                                glm::dvec2 cv = v - c;
 
-                            double v_proj_ab_perp = glm::dot(av, ab_perp);
-                            double v_proj_bc_perp = glm::dot(cv, bc_perp);
-                            double v_proj_ca_perp = glm::dot(cv, ca_perp);
+                                double v_proj_ab_perp = glm::dot(av, ab_perp);
+                                double v_proj_bc_perp = glm::dot(cv, bc_perp);
+                                double v_proj_ca_perp = glm::dot(cv, ca_perp);
 
-                            // will determine in or out, irrespective of winding
-                            if ((v_proj_ab_perp >= 0.0 && v_proj_ca_perp >= 0.0 &&
-                                v_proj_bc_perp >= 0.0) ||
-                                (v_proj_ab_perp <= 0.0 && v_proj_ca_perp <= 0.0 &&
-                                v_proj_bc_perp <= 0.0)) {
-                              maskImage.cesium.pixelData[256 * j + i] =
-                                  static_cast<std::byte>(0xff);
+                                // will determine in or out, irrespective of winding
+                                if ((v_proj_ab_perp >= 0.0 && v_proj_ca_perp >= 0.0 &&
+                                    v_proj_bc_perp >= 0.0) ||
+                                    (v_proj_ab_perp <= 0.0 && v_proj_ca_perp <= 0.0 &&
+                                    v_proj_bc_perp <= 0.0)) {
+                                  maskImage.cesium.pixelData[256 * j + i] =
+                                      static_cast<std::byte>(0xff);
+                                }
+                              }
                             }
                           }
                         }
+
+                        // create sampler parameters
+                        size_t maskSamplerId = model.samplers.size();
+                        model.samplers.emplace_back();
+                        CesiumGltf::Sampler& maskSampler =
+                            model.samplers[maskSamplerId];
+                        maskSampler.magFilter =
+                            CesiumGltf::Sampler::MagFilter::LINEAR;
+                        maskSampler.minFilter =
+                            CesiumGltf::Sampler::MinFilter::LINEAR_MIPMAP_NEAREST;
+                        maskSampler.wrapS =
+                            CesiumGltf::Sampler::WrapS::CLAMP_TO_EDGE;
+                        maskSampler.wrapT =
+                            CesiumGltf::Sampler::WrapT::CLAMP_TO_EDGE;
+
+                        // create texture
+                        size_t maskTextureId = model.textures.size();
+                        model.textures.emplace_back();
+                        CesiumGltf::Texture& maskTexture =
+                            model.textures[maskTextureId];
+                        maskTexture.sampler = int32_t(maskSamplerId);
+                        maskTexture.source = int32_t(maskImageId);
+
+                        // put the opacity mask in the extras
+                        // maybe create custom cesium-unreal extension for this?
+                        model.extras.emplace(
+                            "CUSTOM_MASK_" + customMaskName,
+                            int32_t(maskTextureId));
                       }
+
+                      // same texture transform for all custom masks
+                      // TODO: use KHR_texture_transform
+                      model.extras.emplace("customMaskTranslationX", 0.0);
+                      model.extras.emplace("customMaskTranslationY", 0.0);
+                      model.extras.emplace("customMaskScale", 1.0);
                     }
 
-                    // create sampler parameters
-                    size_t maskSamplerId = model.samplers.size();
-                    model.samplers.emplace_back();
-                    CesiumGltf::Sampler& maskSampler =
-                        model.samplers[maskSamplerId];
-                    maskSampler.magFilter =
-                        CesiumGltf::Sampler::MagFilter::LINEAR;
-                    maskSampler.minFilter =
-                        CesiumGltf::Sampler::MinFilter::LINEAR_MIPMAP_NEAREST;
-                    maskSampler.wrapS =
-                        CesiumGltf::Sampler::WrapS::CLAMP_TO_EDGE;
-                    maskSampler.wrapT =
-                        CesiumGltf::Sampler::WrapT::CLAMP_TO_EDGE;
-
-                    // create texture
-                    size_t maskTextureId = model.textures.size();
-                    model.textures.emplace_back();
-                    CesiumGltf::Texture& maskTexture =
-                        model.textures[maskTextureId];
-                    maskTexture.sampler = int32_t(maskSamplerId);
-                    maskTexture.source = int32_t(maskImageId);
-
-                    // put the opacity mask in the extras
-                    // maybe create custom cesium-unreal extension for this?
-                    model.extras.emplace(
-                        "CUSTOM_MASK_" + customMaskName,
-                        int32_t(maskTextureId));
+                    if (pPrepareRendererResources) {
+                      const glm::dmat4& transform = loadInput.tileTransform;
+                      pRendererResources =
+                          pPrepareRendererResources->prepareInLoadThread(
+                              pContent->model.value(),
+                              transform);
+                    }
                   }
-
-                  // same texture transform for all custom masks
-                  // TODO: use KHR_texture_transform
-                  model.extras.emplace("customMaskTranslationX", 0.0);
-                  model.extras.emplace("customMaskTranslationY", 0.0);
-                  model.extras.emplace("customMaskScale", 1.0);
                 }
 
-                if (pPrepareRendererResources) {
-                  const glm::dmat4& transform = loadInput.tileTransform;
-                  pRendererResources =
-                      pPrepareRendererResources->prepareInLoadThread(
-                          pContent->model.value(),
-                          transform);
-                }
-              }
-            }
+                LoadResult result;
+                result.state = LoadState::ContentLoaded;
+                result.pContent = std::move(pContent);
+                result.pRendererResources = pRendererResources;
 
-            LoadResult result;
-            result.state = LoadState::ContentLoaded;
-            result.pContent = std::move(pContent);
-            result.pRendererResources = pRendererResources;
+                return result;
+              })
+              .thenInMainThread(handleLoadResult)
+              .catchInMainThread(handleLoadError);
 
-            return result;
-          })
-      .thenInMainThread([this](LoadResult&& loadResult) {
-        this->_pContent = std::move(loadResult.pContent);
-        this->_pRendererResources = loadResult.pRendererResources;
-        this->getTileset()->notifyTileDoneLoading(this);
-        this->setState(loadResult.state);
-      })
-      .catchInMainThread([this](const std::exception& e) {
-        this->_pContent.reset();
-        this->_pRendererResources = nullptr;
-        this->getTileset()->notifyTileDoneLoading(this);
-        this->setState(LoadState::Failed);
-
-        SPDLOG_LOGGER_ERROR(
-            this->getTileset()->getExternals().pLogger,
-            "An exception occurred while loading tile: {}",
-            e.what());
-      });
+          return LoadResult{
+            LoadState::ContentLoading,
+            std::make_unique<TileContentLoadResult>(),
+            nullptr
+          };
+        })
+        .thenInMainThread(handleLoadResult)
+        .catchInMainThread(handleLoadError);
 }
 
 bool Tile::unloadContent() noexcept {
