@@ -279,7 +279,9 @@ void Tile::loadContent(const CesiumAsync::AsyncSystem& asyncSystem) {
     if (this->getState() != LoadState::ContentLoaded) {
       this->_pContent = std::move(loadResult.pContent);
       this->_pRendererResources = loadResult.pRendererResources;
-      this->getTileset()->notifyTileDoneLoading(this);
+      if (loadResult.state != LoadState::ContentLoading) {
+        this->getTileset()->notifyTileDoneLoading(this);
+      }
       this->setState(loadResult.state);
     }
   };
@@ -350,17 +352,17 @@ void Tile::loadContent(const CesiumAsync::AsyncSystem& asyncSystem) {
             TileContentFactory::createContent(asyncSystem, loadInput).thenInWorkerThread(
               [loadInput = std::move(loadInput),
                projections = std::move(projections),
-               &cartographicSelections,
-               &customMaskNames,
+               cartographicSelections,
+               customMaskNames,
                gltfUpAxis,
                pPrepareRendererResources,
                pLogger,
-               pResponse](
-                  std::unique_ptr<TileContentLoadResult>&& pContent) mutable {
+               statusCode = pResponse->statusCode()](
+                  std::unique_ptr<TileContentLoadResult> pContent) mutable {
 
                 void* pRendererResources = nullptr;
                 if (pContent) {
-                  pContent->httpStatusCode = pResponse->statusCode();
+                  pContent->httpStatusCode = statusCode;
 
                   if (pContent->model) {
 
